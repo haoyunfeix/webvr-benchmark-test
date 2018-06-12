@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>PlayCanvas Shader Compile test</title>
+
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+        }
+
+        #log {
+            margin: 16px;
+        }
+
+        @keyframes move {
+            0% { left: 0%; }
+            50% { left: calc(100% - 64px); }
+            100% { left: 0%; }
+        }
+
+        #block {
+            position: absolute;
+            bottom: 0px;
+            left: 0%;
+            width: 64px;
+            height: 64px;
+            background-color: #07f;
+
+            animation-name: move;
+            animation-duration: 2000ms;
+            animation-iteration-count: infinite;
+        }
+    </style>
+</head>
+<body>
+    <pre id='log'></pre>
+
+    <canvas id='canvas' width='32' height='32' style='display:block;'></canvas>
+
+    <div id='block'></div>
+
+    <script>
+        var now = function() {
+            return new Date().toISOString();
+        };
+
+        // sourced from: http://webglreport.com/
+        function describeRange(value) {
+            return '[' + value[0] + ', ' + value[1] + ']';
+        }
+        function isPowerOfTwo(n) {
+            return (n !== 0) && ((n & (n - 1)) === 0);
+        }
+        function getAngle(gl) {
+            var lineWidthRange = describeRange(gl.getParameter(gl.ALIASED_LINE_WIDTH_RANGE));
+
+            // Heuristic: ANGLE is only on Windows, not in IE, and not in Edge, and does not implement line width greater than one.
+            var angle = ((navigator.platform === 'Win32') || (navigator.platform === 'Win64')) &&
+                (gl.getParameter(gl.RENDERER) !== 'Internet Explorer') &&
+                (gl.getParameter(gl.RENDERER) !== 'Microsoft Edge') &&
+                (lineWidthRange === describeRange([1,1]));
+
+            if (angle) {
+                // Heuristic: D3D11 backend does not appear to reserve uniforms like the D3D9 backend, e.g.,
+                // D3D11 may have 1024 uniforms per stage, but D3D9 has 254 and 221.
+                //
+                // We could also test for WEBGL_draw_buffers, but many systems do not have it yet
+                // due to driver bugs, etc.
+                if (isPowerOfTwo(gl.getParameter(gl.MAX_VERTEX_UNIFORM_VECTORS)) && isPowerOfTwo(gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS))) {
+                    return 'Yes, D3D11';
+                } else {
+                    return 'Yes, D3D9';
+                }
+            }
+
+            return 'No';
+        }
+
+        // code from: http://stackoverflow.com/a/2401861/1312722
+        function browserAndVersion() {
+            var ua = navigator.userAgent, tem, M = ua.match(/(opera|chrome|safari|firefox|msie|trident(?=\/))\/?\s*(\d+)/i) || [ ];
+            if(/trident/i.test(M[1])) {
+                tem = /\brv[ :]+(\d+)/g.exec(ua) || [ ];
+                return 'IE ' + (tem[1] || '');
+            }
+            if(M[1] === 'Chrome'){
+                tem = ua.match(/\b(OPR|Edge)\/(\d+)/);
+                if (tem != null) return tem.slice(1).join(' ').replace('OPR', 'Opera');
+            }
+            M = M[2] ? [ M[1], M[2] ] : [ navigator.appName, navigator.appVersion, '-?' ];
+            if ((tem = ua.match(/version\/(\d+)/i)) != null) M.splice(1, 1, tem[1]);
+            return M.join(' ');
+        };
+    </script>
+
+    <script>
+        var logElement = document.getElementById('log');
+
+        window.addEventListener('error', function(err) {
+            logElement.textContent += ' \n';
+            logElement.textContent += err.error.stack.replace(new RegExp(window.location.href, 'g'), '/') + '\n';
+        });
+
+
+        logElement.textContent += 'platform:\t' + navigator.platform + '\n';
+        logElement.textContent += 'browser:\t' + browserAndVersion() + '\n';
+        logElement.textContent += 'userAgent:\t' + navigator.userAgent + '\n';
+        logElement.textContent += ' \n';
+
+        var canvas = document.getElementById('canvas');
+        var gl = canvas.getContext('webgl2');
+
+        if (gl) {
+            logElement.textContent += 'webgl2 context created' + '\n';
+            logElement.textContent += ' \n';
+
+            var debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+            if (debugInfo) {
+                var vendor = gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL);
+                var renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+                logElement.textContent += 'GPU vendor:\t' + vendor + '\n';
+                logElement.textContent += 'GPU renderer:\t' + renderer + '\n';
+            } else {
+                logElement.textContent += 'no GPU data available' + '\n';
+            }
+
+            logElement.textContent += 'GPU ANGLE:\t' + getAngle(gl) + '\n';
+            logElement.textContent += ' \n';
+
+            var elapsedTotal = 0;
+            var elapsedTotalCompile = 0;
+            var elapsedTotalLink = 0;
+            var elapsedTotalParams = 0;
+
+            // once shader cache loaded
+            var onShaderLoad = function(raw) {
+                var shaders = raw.split('^SH^');
+
+                logElement.textContent += shaders.length + ' shaders found' + '\n';
+                logElement.textContent += 'starting compilations' + '\n';
+
+                // in next frame to get logs appear
+                requestAnimationFrame(function() {
+                    for(var i = 0; i < shaders.length; i++) {
+                        var shaderDefinition = getShaderCode(shaders[i]);
+                        var program = makeProgram(shaderDefinition);
+                    }
+
+                    document.getElementById('block').style.backgroundColor = '';
+
+                    logElement.textContent += ' ' + '\n';
+
+                    logElement.textContent += (Math.round(elapsedTotal * 100) / 100) + 'ms - shaders compiled, linked and parameters got in ' + '\n';
+                    logElement.textContent += (Math.round(elapsedTotalCompile * 100) / 100) + 'ms - shader compilation ' + '\n';
+                    logElement.textContent += (Math.round(elapsedTotalLink * 100) / 100) + 'ms - program link ' + '\n';
+                    logElement.textContent += (Math.round(elapsedTotalParams * 100) / 100) + 'ms - program attributes & uniforms ' + '\n';
+                    logElement.textContent += ' ' + '\n';
+                    logElement.textContent += 'done' + '\n';
+                });
+            };
+
+            var getShaderCode = function(raw) {
+                var vsStart = raw.indexOf("^VS^");
+                var psStart = raw.indexOf("^PS^");
+                var atStart = raw.indexOf("^AT^");
+
+                var entry = raw.substring(0, vsStart);
+
+                var vsCode = raw.substring(vsStart + 4, psStart);
+                var fsCode = raw.substring(psStart + 4, atStart);
+                var attribsString = raw.substring(atStart + 4, raw.length);
+
+                // to ensure shader is not cached by driver, browser, anyone
+                // add constant which will be always changed
+                vsCode = vsCode.replace('CONST_SHADER_RECACHE', Math.random());
+                fsCode = fsCode.replace('CONST_SHADER_RECACHE', Math.random());
+
+                var a1 = attribsString.split(",");
+                var attributes = { };
+                for(var j = 0; j < a1.length - 1; j += 2)
+                    attributes[a1[j]] = a1[j + 1];
+
+                return {
+                    id: entry,
+                    attributes: attributes,
+                    vs: vsCode,
+                    fs: fsCode
+                };
+            };
+
+            var makeProgram = function(definition) {
+                var info, location, i;
+
+                var start = performance.now();
+
+                // vertex shader compilation
+                var vShader = gl.createShader(gl.VERTEX_SHADER);
+                gl.shaderSource(vShader, definition.vs);
+                gl.compileShader(vShader);
+
+                if (! gl.getShaderParameter(vShader, gl.COMPILE_STATUS)) {
+                    var info = gl.getShaderInfoLog(vShader);
+                    logElement.textContent += 'couldn\'t compile vertex shader ' + definition.id + '\n';
+                    logElement.textContent += definition + '\n';
+                    logElement.textContent += info.toString() + '\n';
+                    return null;
+                }
+
+                gl.finish();
+
+                // fragment shader compilation
+                var fShader = gl.createShader(gl.FRAGMENT_SHADER);
+                gl.shaderSource(fShader, definition.fs);
+                gl.compileShader(fShader);
+
+                if (! gl.getShaderParameter(fShader, gl.COMPILE_STATUS)) {
+                    var info = gl.getShaderInfoLog(fShader);
+                    logElement.textContent += ' ' + '\n';
+                    logElement.textContent += 'couldn\'t compile fragment shader ' + definition.id + '\n';
+                    logElement.textContent += info.toString() + '\n';
+                    return null;
+                }
+
+                gl.finish();
+
+                var elapsedCompile = performance.now() - start;
+                elapsedTotalCompile += elapsedCompile;
+                elapsedTotal += elapsedCompile;
+
+
+                start = performance.now();
+
+                // program
+                var program = gl.createProgram();
+                gl.attachShader(program, vShader);
+                gl.attachShader(program, fShader);
+
+                gl.linkProgram(program);
+
+                if (! gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                    var info = gl.getProgramInfoLog(program);
+                    logElement.textContent += ' ' + '\n';
+                    logElement.textContent += 'couldn\'t link program ' + definition.id + '\n';
+                    logElement.textContent += info.toString() + '\n';
+                    return null;
+                }
+
+                gl.finish();
+
+                var elapsedLink = performance.now() - start;
+                elapsedTotalLink += elapsedLink;
+                elapsedTotal += elapsedLink;
+
+
+                start = performance.now();
+
+                // get attributes
+                var numAttributes = gl.getProgramParameter(program, gl.ACTIVE_ATTRIBUTES);
+
+                // get each attribute location
+                for(i = 0; i < numAttributes; i++) {
+                    info = gl.getActiveAttrib(program, i);
+                    location = gl.getAttribLocation(program, info.name);
+                }
+
+                // get uniforms
+                var numUniforms = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS);
+                for(i = 0; i < numUniforms; i++) {
+                    info = gl.getActiveUniform(program, i);
+                    location = gl.getUniformLocation(program, info.name);
+                }
+
+                gl.finish();
+
+                var elapsedParams = performance.now() - start;
+                elapsedTotalParams += elapsedParams;
+                elapsedTotal += elapsedParams;
+
+                return program;
+            };
+
+            var loadShaderCache = function() {
+                document.getElementById('block').style.backgroundColor = '#f70';
+
+                // load shader cache
+                var xhr = new XMLHttpRequest();
+                xhr.addEventListener('load', function() {
+                    logElement.textContent += 'loaded shader-cache txt file' + '\n';
+
+                    requestAnimationFrame(function() {
+                        onShaderLoad(xhr.responseText);
+                    });
+                });
+                xhr.open('GET', '../shader-cache.txt');
+                xhr.send();
+            };
+
+            window.addEventListener('load', function() {
+                setTimeout(loadShaderCache, 500);
+            });
+        } else {
+            logElement.textContent += 'webgl2 context is not supported' + '\n';
+        }
+    </script>
+</body>
